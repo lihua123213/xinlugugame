@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>李华的像素农场 - P2</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0503;display:flex;justify-content:center;align-items:center;height:100vh;font-family:'Courier New',monospace;overflow:hidden}
+canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;border:4px solid #3a1a08;box-shadow:0 0 80px rgba(0,0,0,0.8),0 0 0 3px #1a0804;border-radius:3px}
+.w{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#ffd700;z-index:10}
+.w h1{font-size:32px;margin-bottom:12px;text-shadow:0 0 20px rgba(255,215,0,0.4)}
+.w p{font-size:14px;color:#aaa;margin-top:8px}
+.d{display:inline-block;animation:b 1.4s infinite both}.d:nth-child(2){animation-delay:.2s}.d:nth-child(3){animation-delay:.4s}
+@keyframes b{0%,80%,100%{opacity:0}40%{opacity:1}}
+.st{position:absolute;top:10px;left:10px;color:#666;font-size:11px;z-index:20}
+</style></head>
+<body>
+<div class="w" id="w">
+<h1>🌾 李华的像素农场</h1>
+<p style="font-size:20px;color:#ffcc44">等待被召集<span class="d">.</span><span class="d">.</span><span class="d">.</span></p>
+<p>请让房主走到P2房间按空格召集你</p>
+<p style="margin-top:16px;font-size:12px;color:#555">WASD移动 | 1-5切工具 | 空格操作</p>
+</div>
+<canvas id="c" width="960" height="640" style="display:none"></canvas>
+<div class="st" id="st">连接中...</div>
+<script>
+var TS=32,MW=80,MH=35,CW=960,CH=640;
+var T={GRASS:0,WATER:1,STONE:2,PATH:4,SAND:5,BRIDGE:6};
+var GC={spring:'#8cc850',summer:'#6aaa3a',fall:'#d4a040',winter:'#d8e8f4'};
+var GC2={spring:'#7ab840',summer:'#5a9a2a',fall:'#c09030',winter:'#c8d8e4'};
+var SNAME={spring:'春',summer:'夏',fall:'秋',winter:'冬'};
+var ws=null,st=null,map=null,crops=null,joined=false,keys={};
+
+window.addEventListener('keydown',function(e){if(['Space','Tab','Escape'].includes(e.code))e.preventDefault();keys[e.code]=true;sendK();});
+window.addEventListener('keyup',function(e){keys[e.code]=false;sendK();});
+function sendK(){if(!ws||ws.readyState!==1)return;var o={};for(var key in keys)if(keys[key])o[key]=true;ws.send(JSON.stringify({type:'p2_input',keys:o}));}
+// 每33ms持续发送按键状态，防止keyup丢失导致Host端旧输入残留
+setInterval(sendK,33);
+
+function connect(){
+  try{
+    ws=new WebSocket('ws://'+location.host+'/?role=client');
+    ws.onopen=function(){document.getElementById('st').textContent='已连接服务器';
+      fetch('/api/map').then(function(r){return r.json()}).then(function(d){if(d&&d.map){map=d.map;document.getElementById('st').textContent='地图已加载，等待召集...';}}).catch(function(){});
+    };
+    ws.onmessage=function(e){
+      var raw=e.data;
+      if(typeof raw==='string'&&raw[0]==='S'){
+        var p=raw.split('|'),p1=p[1].split(','),p2=p[2].split(','),tm=p[3].split(',');
+        var dm={d:'down',u:'up',l:'left',r:'right'};
+        st={p1:{x:+p1[0],y:+p1[1],d:dm[p1[2]]||'down',m:+p1[3],a:+p1[4]},p2:{x:+p2[0],y:+p2[1],d:dm[p2[2]]||'down',m:+p2[3],a:+p2[4],ac:+p2[5]},t:{h:+tm[0],m:+tm[1],d:+tm[2],s:{s:'spring',u:'summer',f:'fall',w:'winter'}[tm[3]]||'spring'},g:+p[4]};
+        if(!joined&&st.p2&&st.p2.ac){joined=true;document.getElementById('w').style.display='none';document.getElementById('c').style.display='block';}
+        if(joined)render();
+        return;
+      }
+      try{var d=JSON.parse(raw);
+      if(d.type==='state'||d.type==='game_state'){
+        st={p1:d.p1,p2:d.p2,t:d.t,g:d.g||0};
+        if(!joined&&st.p2&&st.p2.ac){joined=true;document.getElementById('w').style.display='none';document.getElementById('c').style.display='block';}
+        if(joined)render();
+      }
+      if(d.type==='map_update'&&d.map){map=d.map;}
+      if(d.type==='crop_update'&&d.crops){var cc={};for(var ci=0;ci<d.crops.length;ci+=2){cc[d.crops[ci]]=d.crops[ci+1];}crops=cc;if(joined)render();}
+      if(d.type==='host_ready')document.getElementById('st').textContent='等待房主召集...';
+      if(d.type==='host_disconnected'){joined=false;document.getElementById('w').style.display='block';document.getElementById('c').style.display='none';document.getElementById('st').textContent='房主已断开';}}catch(ex){}
+    };
+    ws.onclose=function(){setTimeout(connect,2000);};
+  }catch(e){setTimeout(connect,2000);}
+}
+connect();
+
+var cv=document.getElementById('c');cv.tabIndex=0;cv.addEventListener('click',function(){cv.focus();});var ctx=cv.getContext('2d');
+ctx.imageSmoothingEnabled=false;
+
+function dk(c,p){var r=parseInt(c.slice(1,3),16),g=parseInt(c.slice(3,5),16),b=parseInt(c.slice(5,7),16),f=1-p;return'#'+[r,g,b].map(x=>Math.floor(x*f).toString(16).padStart(2,'0')).join('');}
+
+function render(){
+  if(!st||!map)return;
+  var gc=GC[st.t.s],gc2=GC2[st.t.s];
+  var cam={x:0,y:0};
+  if(st.p2&&st.p2.ac){cam.x=Math.max(0,Math.min(Math.floor(st.p2.x-CW/2),MW*TS-CW));cam.y=Math.max(0,Math.min(Math.floor(st.p2.y-CH/2),MH*TS-CH));}
+  ctx.clearRect(0,0,CW,CH);
+  var sc=Math.floor(cam.x/TS),ec=Math.ceil((cam.x+CW)/TS),sr=Math.floor(cam.y/TS),er=Math.ceil((cam.y+CH)/TS);
+  for(var y=sr;y<er;y++){for(var x=sc;x<ec;x++){
+    if(y<0||y>=MH||x<0||x>=MW||!map[y])continue;
+    var sx=x*TS-cam.x,sy=y*TS-cam.y,tile=map[y][x],h=(x*374+y*631)&255;
+    if(tile===T.GRASS||tile==='flower'){
+      ctx.fillStyle=gc;ctx.fillRect(sx,sy,TS,TS);
+      if((h*3)&8){ctx.fillStyle=gc2;ctx.fillRect(sx+(h>>4)%(TS-8),sy+(h>>2)%(TS-6),3+(h&3),3+(h&1));}
+      if(tile==='flower'){var fc=['#ffdd44','#ff88aa','#ffccdd','#ffaa44'];ctx.fillStyle='#5a9030';ctx.fillRect(sx+14+(h&7),sy+14+((h>>2)&6),1,3);ctx.fillStyle=fc[(h*7)%fc.length];ctx.fillRect(sx+12+((h>>3)&10),sy+10+((h>>4)&8),3,3);}
+    }else if(tile===T.WATER){
+      ctx.fillStyle='#3078b8';ctx.fillRect(sx,sy,TS,TS);
+      for(var wy=0;wy<TS;wy+=4){ctx.fillStyle=(wy&4)?'#3880c0':'#2870a8';ctx.fillRect(sx,sy+wy,TS,4);}
+      ctx.fillStyle='rgba(180,220,255,0.3)';ctx.fillRect(sx+2+((st.t.d*3+x*7+st.t.m)%6),sy+4,5,1);
+    }else if(tile===T.STONE){ctx.fillStyle='#929292';ctx.fillRect(sx,sy,TS,TS);ctx.fillStyle='#858585';ctx.fillRect(sx+2,sy+2,TS-4,TS-4);}
+    else if(tile===T.SAND){ctx.fillStyle='#f0e0b8';ctx.fillRect(sx,sy,TS,TS);}
+    else if(tile===T.PATH){ctx.fillStyle='#d4b878';ctx.fillRect(sx,sy,TS,TS);ctx.fillStyle='#cfb070';ctx.fillRect(sx+2,sy+2,TS-4,TS-4);}
+    else if(tile===T.BRIDGE){ctx.fillStyle=gc;ctx.fillRect(sx,sy,TS,TS);ctx.fillStyle='#7a5a3a';ctx.fillRect(sx,sy+4,TS,TS-8);ctx.fillStyle='#5a3a1a';ctx.fillRect(sx+2,sy+2,TS-4,3);ctx.fillRect(sx+2,sy+TS-5,TS-4,3);}
+    else if(typeof tile==='string'){
+      if(tile.startsWith('tree_')){ctx.fillStyle=gc;ctx.fillRect(sx,sy,TS,TS);drawTree(ctx,sx,sy,tile);}
+      else if(tile==='shop1'||tile==='rest1'||tile==='smithy1'||tile==='house1'||tile==='p2room1'){ctx.fillStyle=gc;ctx.fillRect(sx,sy,TS*2,TS*2);drawBld(ctx,sx-16,sy-20,tile.replace('1',''));}
+      else if(tile==='mine'){ctx.fillStyle='#6a6a6a';ctx.fillRect(sx,sy,TS,TS);ctx.fillStyle='#151515';ctx.fillRect(sx+5,sy+5,TS-10,TS-10);}
+    }
+  }}
+  // Draw crops
+  if(crops){for(var cy=sr;cy<er;cy++)for(var cx=sc;cx<ec;cx++){var ci2=cy*MW+cx,cv=crops[ci2];if(cv===undefined)continue;var csx=cx*TS-cam.x,csy=cy*TS-cam.y;
+    if(cv>=128){var hasW=cv&1;ctx.fillStyle=hasW?'#4a2010':'#5e3818';ctx.fillRect(csx+2,csy+2,TS-4,TS-4);var ct2=(cv>>4)&7,stg=(cv>>2)&3;
+      var cx2=csx+TS/2,baseY=csy+TS-6;
+      if(stg===0){ctx.fillStyle='#5a9a30';ctx.fillRect(cx2-1,baseY-6,2,6);ctx.fillStyle='#6aaa40';ctx.fillRect(cx2-2,baseY-8,5,3);}
+      else if(stg>=3){var cls={1:'#f0e0a0',2:'#d4b060',3:'#e84838',4:'#e8c838',5:'#e0b840',6:'#f08820'};ctx.fillStyle='#3a7018';ctx.fillRect(cx2-5,baseY-10,10,10);ctx.fillStyle='#4a8a20';ctx.fillRect(cx2-4,baseY-9,8,9);ctx.fillStyle=cls[ct2]||'#fff';ctx.fillRect(cx2-4,baseY-16,8,8);}
+      else{var h2=5+(stg/3)*10;ctx.fillStyle='#5a9a30';ctx.fillRect(cx2-1,baseY-h2,2,h2);ctx.fillStyle='#6aaa40';ctx.fillRect(cx2-3,baseY-h2-2,6,4);}}
+    else{ctx.fillStyle=cv?'#4a2010':'#5e3818';ctx.fillRect(csx+2,csy+2,TS-4,TS-4);}}}
+  if(st.p1)drawChar(ctx,st.p1.x-cam.x,st.p1.y-cam.y,st.p1.d,st.p1.a,!!st.p1.m,'#cc4444','#4466cc','#cc9933','P1');
+  if(st.p2&&st.p2.ac)drawChar(ctx,st.p2.x-cam.x,st.p2.y-cam.y,st.p2.d,st.p2.a,!!st.p2.m,'#33aa55','#33aa55','#cc9933','P2');
+  var hm=st.t.h,mm=st.t.m||0,prog=0;if(hm>=6&&hm<18)prog=((hm-6)*60+mm)/720;else prog=hm>=18?((hm-18)*60+mm)/480:1;
+  if(prog>0.3){var la=prog<0.5?(prog-0.3)/0.2*0.3:prog<0.8?0.3+(prog-0.5)/0.3*0.4:0.7;ctx.fillStyle='rgba(20,15,40,'+Math.min(0.7,la)+')';ctx.fillRect(0,0,CW,CH);}
+  ctx.fillStyle='rgba(14,6,2,0.9)';ctx.fillRect(CW-220,8,212,70);ctx.strokeStyle='#7a5010';ctx.lineWidth=2;ctx.strokeRect(CW-220,8,212,70);ctx.lineWidth=1;
+  ctx.fillStyle='#ffd700';ctx.font='bold 14px monospace';ctx.textAlign='right';ctx.fillText(SNAME[st.t.s]+' 第'+st.t.d+'天 '+String(st.t.h).padStart(2,'0')+':'+String(st.t.m).padStart(2,'0'),CW-18,30);
+  ctx.fillStyle='#ffcc44';ctx.font='12px monospace';ctx.fillText('💰 '+st.g+' G',CW-18,48);
+  var p2stam=st.p2&&st.p2.s!=null?st.p2.s:100,p2ti=st.p2&&st.p2.ti!=null?st.p2.ti:0;var tnames=['锄头','水壶','斧头','镐','钓竿'];
+  ctx.fillStyle=p2stam<30?'#ff6644':'#aacc88';ctx.fillText('⚡ '+p2stam+'/100',CW-18,60);
+  ctx.fillStyle='#aaa';ctx.font='10px monospace';ctx.fillText('🔧 '+tnames[p2ti],CW-18,72);
+  ctx.fillStyle='rgba(0,0,0,0.35)';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText('P2 | WASD移动 | 空格操作 | 1-5切工具',CW/2,CH-10);
+}
+
+function drawChar(ctx,x,y,dir,frame,mv,body,shirt,hat,label){
+  var bob=mv?Math.sin(frame*Math.PI/2)*1.5:0,lx=x-8,ly=y-11+bob;
+  ctx.fillStyle='rgba(0,0,0,0.3)';ctx.beginPath();ctx.ellipse(x,y+13,7,2.5,0,0,Math.PI*2);ctx.fill();
+  var lo=mv&&dir!=='left'&&dir!=='right'?(frame%2?1.5:-1.5):0;
+  ctx.fillStyle='#4a3020';ctx.fillRect(lx+3,ly+18,5,4);ctx.fillRect(lx+8,ly+18+lo,5,4);
+  ctx.fillStyle=shirt;if(dir==='left'||dir==='right')ctx.fillRect(lx+2,ly+14,12,8);else ctx.fillRect(lx+3,ly+14,10,8);
+  ctx.fillStyle=body;ctx.fillRect(lx+2,ly+8,12,7);
+  ctx.fillStyle='#ffcc99';ctx.fillRect(lx+4,ly+1,8,8);ctx.fillStyle='#553311';ctx.fillRect(lx+3,ly,10,4);
+  ctx.fillStyle=hat;ctx.fillRect(lx+1,ly-3,14,4);ctx.fillRect(lx+3,ly-5,10,3);
+  if(dir!=='up'){ctx.fillStyle='#000';if(dir==='down'){ctx.fillRect(lx+5,ly+3,2,2);ctx.fillRect(lx+10,ly+3,2,2);}else if(dir==='right'){ctx.fillRect(lx+10,ly+3,2,2);}else{ctx.fillRect(lx+5,ly+3,2,2);}}
+  ctx.fillStyle='#fff';ctx.font='bold 9px monospace';ctx.textAlign='center';ctx.fillText(label,x,y-18);
+}
+
+function drawTree(ctx,x,y,type){
+  ctx.fillStyle='rgba(0,0,0,0.2)';ctx.beginPath();ctx.ellipse(x+16,y+31,11,3,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#5a3015';ctx.fillRect(x+11,y+12,10,20);
+  if(type.includes('pine')){ctx.fillStyle='#2a6020';ctx.fillRect(x,y-4,32,14);ctx.fillRect(x+6,y-10,20,18);ctx.fillRect(x+10,y-14,12,12);}
+  else{ctx.fillStyle='#3a7020';ctx.fillRect(x,y-2,32,20);ctx.beginPath();ctx.arc(x+16,y+4,15,0,Math.PI*2);ctx.fill();}
+}
+
+function drawBld(ctx,x,y,type){
+  var wc=type==='shop'?'#d4b080':type==='rest'?'#e8d8c0':type==='smithy'?'#a0a0a8':type==='p2room'?'#88aa88':'#dcc8a8';
+  ctx.fillStyle=wc;ctx.fillRect(x+8,y+20,48,40);
+  var rc=type==='shop'?'#882828':type==='rest'?'#886644':type==='smithy'?'#556666':type==='p2room'?'#446644':'#994040';
+  ctx.fillStyle=rc;ctx.fillRect(x+1,y+4,62,18);
+  ctx.fillStyle='#5a3018';ctx.fillRect(x+22,y+34,16,22);
+  ctx.fillStyle='#aaddff';ctx.fillRect(x+12,y+26,12,12);ctx.fillRect(x+40,y+26,12,12);
+  ctx.fillStyle='#5a3018';ctx.fillRect(x+17,y+26,2,12);ctx.fillRect(x+12,y+31,12,2);ctx.fillRect(x+45,y+26,2,12);ctx.fillRect(x+40,y+31,12,2);
+  if(type==='p2room'){ctx.fillStyle='#2a4a2a';ctx.fillRect(x+14,y-8,30,12);ctx.strokeStyle='#6a8a6a';ctx.strokeRect(x+14,y-8,30,12);ctx.fillStyle='#88ff88';ctx.font='bold 8px monospace';ctx.textAlign='center';ctx.fillText('P2',x+29,y+2);}
+}
+</script></body></html>
